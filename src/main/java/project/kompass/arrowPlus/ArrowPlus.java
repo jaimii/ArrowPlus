@@ -44,8 +44,8 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         registerPacketInterceptor();
         startConfigFileListener();
 
-        if (getCommand("arrowplus reload") != null) {
-            getCommand("arrowplus reload").setExecutor(this);
+        if (getCommand("arrowplusreload") != null) {
+            getCommand("arrowplusreload").setExecutor(this);
         }
 
         getLogger().info("ArrowPlus activated for Paper 1.21.11!");
