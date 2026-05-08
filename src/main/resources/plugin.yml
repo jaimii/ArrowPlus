@@ -1,0 +1,7 @@
+name: ArrowPlus
+version: '1.0'
+main: project.kompass.arrowPlus.ArrowPlus
+api-version: '1.21'
+authors: [ JustJaimii ]
+description:
+  Makes Illagers fight zombies. For Project: Kompass
