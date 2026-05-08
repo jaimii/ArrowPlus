@@ -44,13 +44,12 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         registerPacketInterceptor();
         startConfigFileListener();
 
-        // Register the reload command executor
-        if (getCommand("cavreload") != null) {
-            getCommand("cavreload").setExecutor(this);
+        if (getCommand("arrowplus reload") != null) {
+            getCommand("arrowplus reload").setExecutor(this);
         }
 
         getLogger().info("ArrowPlus activated for Paper 1.21.11!");
-        getLogger().info("Live Config Listener is running. Use /arrowplus after modifying config.yml to update velocities.");
+        getLogger().info("Live Config Listener is running. Use '/arrowplus reload' after modifying config.yml to update velocities.");
     }
 
     @Override
@@ -81,7 +80,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         }
         return false;
     }
-
+    // Velocity Handler
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityShootBow(EntityShootBowEvent event) {
         if (!(event.getProjectile() instanceof AbstractArrow arrow)) return;
@@ -113,7 +112,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             }, 1L);
         }
     }
-
+    // Packet fixes through ProtocolLib to remove client side visual glitch.
     private void registerPacketInterceptor() {
         protocolManager.addPacketListener(new PacketAdapter(this, ListenerPriority.HIGHEST, PacketType.Play.Server.ENTITY_VELOCITY) {
             @Override
@@ -124,10 +123,8 @@ public class ArrowPlus extends JavaPlugin implements Listener {
                     if (customVelocities.containsKey(arrow.getUniqueId())) {
                         Vector correctVelocity = customVelocities.get(arrow.getUniqueId());
 
-                        event.getPacket().getIntegers()
-                                .write(1, (int) (correctVelocity.getX() * 8000.0D))
-                                .write(2, (int) (correctVelocity.getY() * 8000.0D))
-                                .write(3, (int) (correctVelocity.getZ() * 8000.0D));
+                        // Write the Bukkit Vector directly to the ProtocolLib packet.
+                        event.getPacket().getVectors().write(0, correctVelocity);
                     }
                 }
             }
@@ -136,11 +133,13 @@ public class ArrowPlus extends JavaPlugin implements Listener {
 
     private PacketContainer createVelocityPacket(Entity entity, Vector velocity) {
         PacketContainer packet = protocolManager.createPacket(PacketType.Play.Server.ENTITY_VELOCITY);
-        packet.getIntegers()
-                .write(0, entity.getEntityId())
-                .write(1, (int) (velocity.getX() * 8000.0D))
-                .write(2, (int) (velocity.getY() * 8000.0D))
-                .write(3, (int) (velocity.getZ() * 8000.0D));
+
+        // Entity ID remains an Integer at index 0.
+        packet.getIntegers().write(0, entity.getEntityId());
+
+        // The unscaled movement velocity is written as a Vector object to index 0.
+        packet.getVectors().write(0, velocity);
+
         return packet;
     }
 
