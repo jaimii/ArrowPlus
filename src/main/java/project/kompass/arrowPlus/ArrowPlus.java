@@ -49,7 +49,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         }
 
         getLogger().info("ArrowPlus activated for Paper 1.21.11!");
-        getLogger().info("Live Config Listener is running. Use '/arrowplus reload' after modifying config.yml to update velocities.");
+        getLogger().info("Live Config Listener is running. Use /arrowplusreload after modifying config.yml to update velocities.");
     }
 
     @Override
@@ -66,7 +66,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
     //Reload Command
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (command.getName().equalsIgnoreCase("cavreload")) {
+        if (command.getName().equalsIgnoreCase("arrowplusreload")) {
             if (!sender.hasPermission("arrowplus.reload")) {
                 sender.sendMessage("§cYou do not have permission to use this command.");
                 return true;
