@@ -1,0 +1,13 @@
+# Velocity Multipliers. 1.0 is default vanilla speed.
+# You can change these while the server is running and save the file.
+# The plugin will automatically detect the changes!
+multipliers:
+  DEFAULT: 1.0
+  PLAYER: 1.0
+  SKELETON: 1.0
+  PILLAGER: 1.0
+  ILLUSIONER: 1.0
+  PIGLIN: 1.0
+  BOGGED: 1.0
+  PARCHED: 1.0
+  STRAY: 1.0

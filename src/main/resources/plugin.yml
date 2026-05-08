@@ -4,4 +4,21 @@ main: project.kompass.arrowPlus.ArrowPlus
 api-version: '1.21'
 authors: [ JustJaimii ]
 description:
-  Makes Illagers fight zombies. For Project: Kompass
+  Modular arrow customizability. For Project: Kompass
+
+dependencies:
+  server:
+    ProtocolLib:
+      load: BEFORE
+      required: true
+
+commands:
+  arrowplus reload:
+    description: Reloads the plugin configuration.
+    usage: /arrowplus reload
+    permission: arrowplus.reload
+
+permissions:
+  arrowplus.reload:
+    description: Allows the user to manually reload the plugin config.
+    default: op
