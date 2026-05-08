@@ -15,7 +15,7 @@ dependencies:
 commands:
   arrowplusreload:
     description: Reloads the plugin configuration.
-    usage: /arrowplus reload
+    usage: /arrowplusreload
     permission: arrowplus.reload
 
 permissions:
