@@ -44,12 +44,13 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         registerPacketInterceptor();
         startConfigFileListener();
 
-        if (getCommand("arrowplusreload") != null) {
-            getCommand("arrowplusreload").setExecutor(this);
+        // Register the new base command
+        if (getCommand("arrowplus") != null) {
+            getCommand("arrowplus").setExecutor(this);
         }
 
         getLogger().info("ArrowPlus activated for Paper 1.21.11!");
-        getLogger().info("Live Config Listener is running. Use /arrowplusreload after modifying config.yml to update velocities.");
+        getLogger().info("Live Config Listener is running. Use /arrowplus reload after modifying config.yml to update velocities.");
     }
 
     @Override
@@ -63,19 +64,28 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         }
     }
 
-    //Reload Command
+    // Reload Command
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (command.getName().equalsIgnoreCase("arrowplusreload")) {
-            if (!sender.hasPermission("arrowplus.reload")) {
-                sender.sendMessage("§cYou do not have permission to use this command.");
+        if (command.getName().equalsIgnoreCase("arrowplus")) {
+
+            // Check if they provided an argument and if it is "reload"
+            if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+
+                if (!sender.hasPermission("arrowplus.reload")) {
+                    sender.sendMessage("§cYou do not have permission to use this command.");
+                    return true;
+                }
+
+                // Reload the configuration into memory
+                reloadConfig();
+                sender.sendMessage("§a[ArrowPlus] Configuration reloaded successfully!");
+                getLogger().info("Config manually reloaded by " + sender.getName());
                 return true;
             }
 
-            // Reload the configuration into memory
-            reloadConfig();
-            sender.sendMessage("§a[ArrowPlus] Configuration reloaded successfully!");
-            getLogger().info("Config manually reloaded by " + sender.getName());
+            // If they just typed "/arrowplus" or "/arrowplus somethingelse"
+            sender.sendMessage("§cUsage: /arrowplus reload");
             return true;
         }
         return false;
