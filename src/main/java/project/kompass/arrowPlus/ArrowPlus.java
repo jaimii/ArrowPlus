@@ -17,6 +17,11 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.AbstractSkeleton;
+import org.bukkit.entity.Illusioner;
+import org.bukkit.entity.Pillager;
+import org.bukkit.entity.Raider;
+import org.bukkit.entity.Witch;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -104,7 +109,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         double speed = origVel.length() * multiplier;
         Vector newVelocity;
 
-        // FIX: Adjust the vertical pitch for Mobs with active targets so their AI aims correctly
+        // Adjust the vertical pitch for Mobs with active targets so their AI aims correctly
         if (shooter instanceof Mob mob && mob.getTarget() != null) {
             LivingEntity target = mob.getTarget();
             Location arrowLoc = arrow.getLocation();
@@ -178,7 +183,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
                         0.3,
                         entity -> !entity.getUniqueId().equals(shooter.getUniqueId())
                                 && entity instanceof LivingEntity target
-                                && !shouldPassThrough(shooter, target) // FIX: Ignore teamed pass-through mobs in manual raytrace
+                                && !shouldPassThrough(shooter, target) // Ignore teamed pass-through mobs in manual raytrace
                                 && !(target instanceof Player)
                                 && !(target instanceof ArmorStand)
                                 && !target.isDead()
@@ -235,28 +240,34 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             if (shouldPassThrough(shooter, hitEntity)) {
                 event.setCancelled(true);
 
-                // FIX: Synchronize the arrow's velocity and position to un-stick the client-side rendering prediction
+                // REFINED FIX: Synchronize both absolute coordinates (teleport) and velocity 1-tick later
+                // Snapping the arrow 1 tick later allows it to have moved forward on the server,
+                // completely clearing the moving target's bounding box and overriding client attachment prediction.
                 Bukkit.getScheduler().runTask(this, () -> {
                     if (arrow.isValid()) {
                         Vector velocity = arrow.getVelocity();
-                        arrow.setVelocity(velocity); // Automatically triggers server-side updates to tracking clients
+                        arrow.setVelocity(velocity); // Triggers Spigot/Paper velocity update to tracking clients
+                        Location location = arrow.getLocation();
 
-                        // Force fully-formed updates to all nearby players using ProtocolLib
+                        PacketContainer velocityPacket = createVelocityPacket(arrow, velocity);
+                        PacketContainer teleportPacket = createTeleportPacket(arrow, location);
+
+                        // Broadcast updates to nearby players
                         for (Player player : arrow.getWorld().getPlayers()) {
-                            if (player.getLocation().distanceSquared(arrow.getLocation()) < 4096.0) { // 64 blocks
+                            if (player.getLocation().distanceSquared(location) < 4096.0) { // 64 blocks
                                 try {
-                                    PacketContainer packet = createVelocityPacket(arrow, velocity);
-                                    protocolManager.sendServerPacket(player, packet);
+                                    protocolManager.sendServerPacket(player, teleportPacket);
+                                    protocolManager.sendServerPacket(player, velocityPacket);
                                 } catch (Exception ignored) {}
                             }
                         }
                     }
                 });
-                return; // FIX: Do NOT remove custom velocity entry from customVelocities so physics task remains active
+                return; // Do NOT remove custom velocity entry so physics task remains active
             }
         }
 
-        // Standard collision (e.g., ground, wall, or eligible target) -> clean up tracking maps
+        // Standard collision -> clean up tracking maps
         customVelocities.remove(arrow.getUniqueId());
     }
 
@@ -266,7 +277,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         if (shooter == null || target == null) return false;
 
         // Rule 1: Skeletons (including Bogged, Wither Skeletons, Strays, and Parched) pass-through each other
-        if (shooter instanceof org.bukkit.entity.AbstractSkeleton && target instanceof org.bukkit.entity.AbstractSkeleton) {
+        if (shooter instanceof AbstractSkeleton && target instanceof AbstractSkeleton) {
             return true;
         }
 
@@ -279,11 +290,11 @@ public class ArrowPlus extends JavaPlugin implements Listener {
     }
 
     private boolean isIllusionerOrPillager(Entity entity) {
-        return entity instanceof org.bukkit.entity.Illusioner || entity instanceof org.bukkit.entity.Pillager;
+        return entity instanceof Illusioner || entity instanceof Pillager;
     }
 
     private boolean isRaiderOrWitch(Entity entity) {
-        return entity instanceof org.bukkit.entity.Raider || entity instanceof org.bukkit.entity.Witch;
+        return entity instanceof Raider || entity instanceof Witch;
     }
 
     private void registerPacketInterceptor() {
@@ -322,6 +333,22 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             packet.getIntegers().write(3, (int) (velocity.getZ() * 8000.0));
         }
 
+        return packet;
+    }
+
+    // New helper method to construct an absolute coordinates packet for clients
+    private PacketContainer createTeleportPacket(Entity entity, Location location) {
+        PacketContainer packet = protocolManager.createPacket(PacketType.Play.Server.ENTITY_TELEPORT);
+        packet.getIntegers().write(0, entity.getEntityId());
+
+        packet.getDoubles().write(0, location.getX());
+        packet.getDoubles().write(1, location.getY());
+        packet.getDoubles().write(2, location.getZ());
+
+        packet.getBytes().write(0, (byte) (location.getYaw() * 256.0F / 360.0F));
+        packet.getBytes().write(1, (byte) (location.getPitch() * 256.0F / 360.0F));
+
+        packet.getBooleans().write(0, entity.isOnGround());
         return packet;
     }
 
