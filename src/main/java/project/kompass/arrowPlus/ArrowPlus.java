@@ -240,27 +240,19 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             if (shouldPassThrough(shooter, hitEntity)) {
                 event.setCancelled(true);
 
-                // REFINED FIX: Synchronize both absolute coordinates (teleport) and velocity 1-tick later
-                // Snapping the arrow 1 tick later allows it to have moved forward on the server,
-                // completely clearing the moving target's bounding box and overriding client attachment prediction.
+                // Synchronize both absolute coordinates and velocity 1-tick later natively
                 Bukkit.getScheduler().runTask(this, () -> {
                     if (arrow.isValid()) {
                         Vector velocity = arrow.getVelocity();
-                        arrow.setVelocity(velocity); // Triggers Spigot/Paper velocity update to tracking clients
                         Location location = arrow.getLocation();
 
-                        PacketContainer velocityPacket = createVelocityPacket(arrow, velocity);
-                        PacketContainer teleportPacket = createTeleportPacket(arrow, location);
+                        // 1. Teleporting the arrow forces Paper to automatically compile and
+                        //    broadcast the correct version-specific teleport packet to all tracking clients.
+                        //    This breaks the client-side arrow attachment prediction cleanly.
+                        arrow.teleport(location);
 
-                        // Broadcast updates to nearby players
-                        for (Player player : arrow.getWorld().getPlayers()) {
-                            if (player.getLocation().distanceSquared(location) < 4096.0) { // 64 blocks
-                                try {
-                                    protocolManager.sendServerPacket(player, teleportPacket);
-                                    protocolManager.sendServerPacket(player, velocityPacket);
-                                } catch (Exception ignored) {}
-                            }
-                        }
+                        // 2. Re-apply velocity so it continues its trajectory seamlessly on both server and client.
+                        arrow.setVelocity(velocity);
                     }
                 });
                 return; // Do NOT remove custom velocity entry so physics task remains active
