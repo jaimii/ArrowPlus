@@ -8,11 +8,14 @@ import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.AbstractArrow;
+import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -46,7 +49,6 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         registerPacketInterceptor();
         startConfigFileListener();
 
-        // Register the new base command
         if (getCommand("arrowplus") != null) {
             getCommand("arrowplus").setExecutor(this);
         }
@@ -66,34 +68,25 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         }
     }
 
-    // Reload Command
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("arrowplus")) {
-
-            // Check if they provided an argument and if it is "reload"
             if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
-
                 if (!sender.hasPermission("arrowplus.reload")) {
                     sender.sendMessage("§cYou do not have permission to use this command.");
                     return true;
                 }
-
-                // Reload the configuration into memory
                 reloadConfig();
                 sender.sendMessage("§a[ArrowPlus] Configuration reloaded successfully!");
                 getLogger().info("Config manually reloaded by " + sender.getName());
                 return true;
             }
-
-            // If they just typed "/arrowplus" or "/arrowplus somethingelse"
             sender.sendMessage("§cUsage: /arrowplus reload");
             return true;
         }
         return false;
     }
 
-    // Velocity Handler
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityShootBow(EntityShootBowEvent event) {
         if (!(event.getProjectile() instanceof AbstractArrow arrow)) return;
@@ -104,55 +97,119 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         double multiplier = getConfig().getDouble("multipliers." + entityTypeName,
                 getConfig().getDouble("multipliers.DEFAULT", 1.0));
 
-        if (multiplier == 1.0) return;
+        // Avoid division-by-zero or redundant calculations if multiplier is 1.0 or invalid
+        if (multiplier <= 0.0 || multiplier == 1.0) return;
 
-        Vector newVelocity = arrow.getVelocity().clone().multiply(multiplier);
+        Vector origVel = arrow.getVelocity();
+        double speed = origVel.length() * multiplier;
+        Vector newVelocity;
+
+        // FIX: Adjust the vertical pitch for Mobs with active targets so their AI aims correctly
+        if (shooter instanceof Mob mob && mob.getTarget() != null) {
+            LivingEntity target = mob.getTarget();
+            Location arrowLoc = arrow.getLocation();
+            Location targetLoc = target.getLocation();
+
+            double d0 = targetLoc.getX() - arrowLoc.getX();
+            // 0.3333333333333333D of target height is the standard target offset used by Minecraft AI
+            double d1 = (targetLoc.getY() + target.getHeight() * 0.3333333333333333D) - arrowLoc.getY();
+            double d2 = targetLoc.getZ() - arrowLoc.getZ();
+            double d3 = Math.sqrt(d0 * d0 + d2 * d2); // Horizontal distance
+
+            // Gravity compensation factor scales inversely with the square of the multiplier
+            double d1_adjusted = d1 + d3 * (0.2 / (multiplier * multiplier));
+
+            // Create target direction vector
+            Vector targetDir = new Vector(d0, d1_adjusted, d2).normalize();
+
+            // Preserve horizontal direction/spread from the original arrow velocity
+            Vector horizDir = new Vector(origVel.getX(), 0, origVel.getZ());
+            if (horizDir.lengthSquared() > 0) {
+                horizDir.normalize();
+            } else {
+                horizDir = new Vector(d0, 0, d2).normalize();
+            }
+
+            double horizLength = Math.sqrt(targetDir.getX() * targetDir.getX() + targetDir.getZ() * targetDir.getZ());
+
+            Vector finalDir = new Vector(
+                    horizDir.getX() * horizLength,
+                    targetDir.getY(),
+                    horizDir.getZ() * horizLength
+            );
+
+            newVelocity = finalDir.multiply(speed);
+        } else {
+            // Fallback to basic multiplication for players or targetless mobs
+            newVelocity = origVel.clone().multiply(multiplier);
+        }
+
         arrow.setVelocity(newVelocity);
-
         customVelocities.put(arrow.getUniqueId(), newVelocity);
 
         // Fallback cleanup
         Bukkit.getScheduler().runTaskLater(this, () -> customVelocities.remove(arrow.getUniqueId()), 100L);
 
-        // FIX 1: Manually track and trace collisions with NoAI mobs
+        // Store the starting location of the arrow
+        final Location[] lastLoc = { arrow.getLocation() };
+
+        // Manually track and trace collisions with NoAI, unaware, or clipped mobs
         Bukkit.getScheduler().runTaskTimer(this, (task) -> {
-            if (!arrow.isValid() || arrow.isInBlock() || arrow.isOnGround()) {
+            if (!customVelocities.containsKey(arrow.getUniqueId())) {
+                task.cancel();
+                return;
+            }
+
+            if (!arrow.isValid()) {
                 task.cancel();
                 customVelocities.remove(arrow.getUniqueId());
                 return;
             }
 
-            Vector vel = arrow.getVelocity();
-            double speed = vel.length();
-            if (speed < 0.1) return;
+            Location currentLoc = arrow.getLocation();
+            Vector travel = currentLoc.toVector().subtract(lastLoc[0].toVector());
+            double distance = travel.length();
 
-            RayTraceResult result = arrow.getWorld().rayTraceEntities(
-                    arrow.getLocation(),
-                    vel.clone().normalize(),
-                    speed,
-                    0.3,
-                    entity -> entity != shooter && entity instanceof LivingEntity && !entity.isDead()
-            );
+            if (distance > 0.01) {
+                RayTraceResult result = arrow.getWorld().rayTraceEntities(
+                        lastLoc[0],
+                        travel.clone().normalize(),
+                        distance,
+                        0.3,
+                        entity -> !entity.getUniqueId().equals(shooter.getUniqueId())
+                                && entity instanceof LivingEntity target
+                                && !shouldPassThrough(shooter, target) // FIX: Ignore teamed pass-through mobs in manual raytrace
+                                && !(target instanceof Player)
+                                && !(target instanceof ArmorStand)
+                                && !target.isDead()
+                );
 
-            if (result != null && result.getHitEntity() instanceof LivingEntity target) {
-                if (!target.hasAI()) { // Target is a NoAI Mob
+                if (result != null && result.getHitEntity() instanceof LivingEntity target) {
                     task.cancel();
                     customVelocities.remove(arrow.getUniqueId());
 
-                    // Replicate vanilla projectile damage formulation
-                    double damage = arrow.getDamage() * speed;
+                    double speedVal = distance;
+                    double damage = arrow.getDamage() * speedVal;
                     if (arrow.isCritical()) {
                         damage += Math.random() * (damage / 2.0) + 1.0;
                     }
 
                     target.damage(damage, shooter);
 
-                    // Replicate hits
                     arrow.getWorld().playSound(result.getHitPosition().toLocation(arrow.getWorld()),
                             org.bukkit.Sound.ENTITY_ARROW_HIT, 1.0F, 1.2F);
                     arrow.remove();
+                    return;
                 }
             }
+
+            if (arrow.isInBlock() || arrow.isOnGround()) {
+                task.cancel();
+                customVelocities.remove(arrow.getUniqueId());
+                return;
+            }
+
+            lastLoc[0] = currentLoc;
         }, 1L, 1L);
 
         if (shooter instanceof Player player) {
@@ -168,14 +225,67 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         }
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onProjectileHit(ProjectileHitEvent event) {
-        if (event.getEntity() instanceof AbstractArrow arrow) {
-            customVelocities.remove(arrow.getUniqueId());
+        if (!(event.getEntity() instanceof AbstractArrow arrow)) return;
+
+        if (event.getHitEntity() != null && arrow.getShooter() instanceof Entity shooter) {
+            Entity hitEntity = event.getHitEntity();
+
+            if (shouldPassThrough(shooter, hitEntity)) {
+                event.setCancelled(true);
+
+                // FIX: Synchronize the arrow's velocity and position to un-stick the client-side rendering prediction
+                Bukkit.getScheduler().runTask(this, () -> {
+                    if (arrow.isValid()) {
+                        Vector velocity = arrow.getVelocity();
+                        arrow.setVelocity(velocity); // Automatically triggers server-side updates to tracking clients
+
+                        // Force fully-formed updates to all nearby players using ProtocolLib
+                        for (Player player : arrow.getWorld().getPlayers()) {
+                            if (player.getLocation().distanceSquared(arrow.getLocation()) < 4096.0) { // 64 blocks
+                                try {
+                                    PacketContainer packet = createVelocityPacket(arrow, velocity);
+                                    protocolManager.sendServerPacket(player, packet);
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                    }
+                });
+                return; // FIX: Do NOT remove custom velocity entry from customVelocities so physics task remains active
+            }
         }
+
+        // Standard collision (e.g., ground, wall, or eligible target) -> clean up tracking maps
+        customVelocities.remove(arrow.getUniqueId());
     }
 
-    // Packet fixes through ProtocolLib to remove client side visual glitch.
+    // --- HELPER PASS-THROUGH LOGIC ---
+
+    private boolean shouldPassThrough(Entity shooter, Entity target) {
+        if (shooter == null || target == null) return false;
+
+        // Rule 1: Skeletons (including Bogged, Wither Skeletons, Strays, and Parched) pass-through each other
+        if (shooter instanceof org.bukkit.entity.AbstractSkeleton && target instanceof org.bukkit.entity.AbstractSkeleton) {
+            return true;
+        }
+
+        // Rule 2: Illusioner and Pillager projectiles pass-through all raider types, including the witch
+        if (isIllusionerOrPillager(shooter) && isRaiderOrWitch(target)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean isIllusionerOrPillager(Entity entity) {
+        return entity instanceof org.bukkit.entity.Illusioner || entity instanceof org.bukkit.entity.Pillager;
+    }
+
+    private boolean isRaiderOrWitch(Entity entity) {
+        return entity instanceof org.bukkit.entity.Raider || entity instanceof org.bukkit.entity.Witch;
+    }
+
     private void registerPacketInterceptor() {
         protocolManager.addPacketListener(new PacketAdapter(this, ListenerPriority.HIGHEST, PacketType.Play.Server.ENTITY_VELOCITY) {
             @Override
@@ -187,10 +297,13 @@ public class ArrowPlus extends JavaPlugin implements Listener {
                     if (customVelocities.containsKey(arrow.getUniqueId())) {
                         Vector correctVelocity = customVelocities.get(arrow.getUniqueId());
 
-                        // FIX 2: Write directly to short/integer velocity indices (scaled by 8000)
-                        packet.getIntegers().write(1, (int) (correctVelocity.getX() * 8000.0));
-                        packet.getIntegers().write(2, (int) (correctVelocity.getY() * 8000.0));
-                        packet.getIntegers().write(3, (int) (correctVelocity.getZ() * 8000.0));
+                        if (packet.getVectors().size() > 0) {
+                            packet.getVectors().write(0, correctVelocity);
+                        } else if (packet.getIntegers().size() >= 4) {
+                            packet.getIntegers().write(1, (int) (correctVelocity.getX() * 8000.0));
+                            packet.getIntegers().write(2, (int) (correctVelocity.getY() * 8000.0));
+                            packet.getIntegers().write(3, (int) (correctVelocity.getZ() * 8000.0));
+                        }
                     }
                 }
             }
@@ -199,14 +312,15 @@ public class ArrowPlus extends JavaPlugin implements Listener {
 
     private PacketContainer createVelocityPacket(Entity entity, Vector velocity) {
         PacketContainer packet = protocolManager.createPacket(PacketType.Play.Server.ENTITY_VELOCITY);
-
-        // Entity ID remains an Integer at index 0.
         packet.getIntegers().write(0, entity.getEntityId());
 
-        // FIX 2: Write velocity coordinates as scaled integers (x8000) at indices 1, 2, and 3
-        packet.getIntegers().write(1, (int) (velocity.getX() * 8000.0));
-        packet.getIntegers().write(2, (int) (velocity.getY() * 8000.0));
-        packet.getIntegers().write(3, (int) (velocity.getZ() * 8000.0));
+        if (packet.getVectors().size() > 0) {
+            packet.getVectors().write(0, velocity);
+        } else if (packet.getIntegers().size() >= 4) {
+            packet.getIntegers().write(1, (int) (velocity.getX() * 8000.0));
+            packet.getIntegers().write(2, (int) (velocity.getY() * 8000.0));
+            packet.getIntegers().write(3, (int) (velocity.getZ() * 8000.0));
+        }
 
         return packet;
     }
