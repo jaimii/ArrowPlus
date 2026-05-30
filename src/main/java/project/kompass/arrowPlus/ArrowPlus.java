@@ -171,6 +171,10 @@ public class ArrowPlus extends JavaPlugin implements Listener {
                 return;
             }
 
+            // FIX 1: Update the stored custom velocity map with the arrow's current,
+            // real-time server velocity so that the packet interceptor respects water drag.
+            customVelocities.put(arrow.getUniqueId(), arrow.getVelocity());
+
             Location currentLoc = arrow.getLocation();
             Vector travel = currentLoc.toVector().subtract(lastLoc[0].toVector());
             double distance = travel.length();
@@ -221,7 +225,9 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             Bukkit.getScheduler().runTaskLater(this, () -> {
                 if (!arrow.isValid()) return;
                 try {
-                    PacketContainer packet = createVelocityPacket(arrow, newVelocity);
+                    // FIX 2: Send the actual tick-1 velocity (with drag/gravity applied)
+                    // instead of the raw newVelocity, maintaining sync with the client.
+                    PacketContainer packet = createVelocityPacket(arrow, arrow.getVelocity());
                     protocolManager.sendServerPacket(player, packet);
                 } catch (Exception e) {
                     getLogger().warning("Failed to send velocity sync packet: " + e.getMessage());
