@@ -25,8 +25,10 @@ import org.bukkit.entity.Witch;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
@@ -152,8 +154,17 @@ public class ArrowPlus extends JavaPlugin implements Listener {
         arrow.setVelocity(newVelocity);
         customVelocities.put(arrow.getUniqueId(), newVelocity);
 
+        // Turn the arrow into a piercing arrow for friendly pass-through mechanics
+        arrow.setMetadata("arrowplus_original_pierce", new FixedMetadataValue(this, arrow.getPierceLevel()));
+        arrow.setPierceLevel(127);
+
         // Fallback cleanup
-        Bukkit.getScheduler().runTaskLater(this, () -> customVelocities.remove(arrow.getUniqueId()), 100L);
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            customVelocities.remove(arrow.getUniqueId());
+            if (arrow.isValid()) {
+                arrow.removeMetadata("arrowplus_original_pierce", this);
+            }
+        }, 100L);
 
         // Store the starting location of the arrow
         final Location[] lastLoc = { arrow.getLocation() };
@@ -171,11 +182,18 @@ public class ArrowPlus extends JavaPlugin implements Listener {
                 return;
             }
 
-            // FIX 1: Update the stored custom velocity map with the arrow's current,
+            // Update the stored custom velocity map with the arrow's current,
             // real-time server velocity so that the packet interceptor respects water drag.
             customVelocities.put(arrow.getUniqueId(), arrow.getVelocity());
 
             Location currentLoc = arrow.getLocation();
+
+            // FIX: Prevent cross-world IllegalArgumentException (e.g. portal traversal)
+            if (!currentLoc.getWorld().equals(lastLoc[0].getWorld())) {
+                lastLoc[0] = currentLoc;
+                return;
+            }
+
             Vector travel = currentLoc.toVector().subtract(lastLoc[0].toVector());
             double distance = travel.length();
 
@@ -225,7 +243,7 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             Bukkit.getScheduler().runTaskLater(this, () -> {
                 if (!arrow.isValid()) return;
                 try {
-                    // FIX 2: Send the actual tick-1 velocity (with drag/gravity applied)
+                    // Send the actual tick-1 velocity (with drag/gravity applied)
                     // instead of the raw newVelocity, maintaining sync with the client.
                     PacketContainer packet = createVelocityPacket(arrow, arrow.getVelocity());
                     protocolManager.sendServerPacket(player, packet);
@@ -244,29 +262,40 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             Entity hitEntity = event.getHitEntity();
 
             if (shouldPassThrough(shooter, hitEntity)) {
-                event.setCancelled(true);
-
-                // Synchronize both absolute coordinates and velocity 1-tick later natively
-                Bukkit.getScheduler().runTask(this, () -> {
-                    if (arrow.isValid()) {
-                        Vector velocity = arrow.getVelocity();
-                        Location location = arrow.getLocation();
-
-                        // 1. Teleporting the arrow forces Paper to automatically compile and
-                        //    broadcast the correct version-specific teleport packet to all tracking clients.
-                        //    This breaks the client-side arrow attachment prediction cleanly.
-                        arrow.teleport(location);
-
-                        // 2. Re-apply velocity so it continues its trajectory seamlessly on both server and client.
-                        arrow.setVelocity(velocity);
-                    }
-                });
-                return; // Do NOT remove custom velocity entry so physics task remains active
+                // Return early without clearing the custom velocity map or resetting pierce level.
+                // Letting the event succeed allows Minecraft to naturally mark this entity as pierced,
+                // avoiding infinite loops or getting stuck on the same entity.
+                return;
             }
         }
 
-        // Standard collision -> clean up tracking maps
+        // Standard collision (block or non-friendly entity) -> clean up tracking maps
         customVelocities.remove(arrow.getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof AbstractArrow arrow)) return;
+
+        if (arrow.hasMetadata("arrowplus_original_pierce")) {
+            Entity target = event.getEntity();
+            if (arrow.getShooter() instanceof Entity shooter) {
+                if (shouldPassThrough(shooter, target)) {
+                    // Friendly target: cancel damage completely so it passes through harmlessly
+                    event.setCancelled(true);
+                    return;
+                }
+            }
+
+            // Normal/hostile target: restore the arrow's original pierce level before it resolves
+            try {
+                int originalPierce = arrow.getMetadata("arrowplus_original_pierce").get(0).asInt();
+                arrow.setPierceLevel(originalPierce);
+            } catch (Exception e) {
+                arrow.setPierceLevel(0);
+            }
+            arrow.removeMetadata("arrowplus_original_pierce", this);
+        }
     }
 
     // --- HELPER PASS-THROUGH LOGIC ---
@@ -331,22 +360,6 @@ public class ArrowPlus extends JavaPlugin implements Listener {
             packet.getIntegers().write(3, (int) (velocity.getZ() * 8000.0));
         }
 
-        return packet;
-    }
-
-    // New helper method to construct an absolute coordinates packet for clients
-    private PacketContainer createTeleportPacket(Entity entity, Location location) {
-        PacketContainer packet = protocolManager.createPacket(PacketType.Play.Server.ENTITY_TELEPORT);
-        packet.getIntegers().write(0, entity.getEntityId());
-
-        packet.getDoubles().write(0, location.getX());
-        packet.getDoubles().write(1, location.getY());
-        packet.getDoubles().write(2, location.getZ());
-
-        packet.getBytes().write(0, (byte) (location.getYaw() * 256.0F / 360.0F));
-        packet.getBytes().write(1, (byte) (location.getPitch() * 256.0F / 360.0F));
-
-        packet.getBooleans().write(0, entity.isOnGround());
         return packet;
     }
 
